@@ -56,10 +56,28 @@ def apply_deaths(state: GameState, kills: list[Kill]) -> NightResult:
         player.death_night = state.night
         result.deaths.append(Death(player_id=player.id, source=kill.source.value))
 
+        if player.role_id == "hunter":
+            result.pending_hunters.append(player.id)
+
         if player.lover_id and state.is_alive(player.lover_id):
             lover = state.get(player.lover_id)
             result.log.append(f"{lover.name}: chết theo người yêu")
             queue.append(Kill(lover.id, KillSource.LOVER))
+    return result
+
+
+def apply_hunter_shot(
+    state: GameState, hunter_id: str, target_id: str | None
+) -> NightResult:
+    """Thợ Săn đã chết bắn một phát không thể chặn."""
+    if target_id is None or not state.is_alive(target_id):
+        state.add_log(f"{state.get(hunter_id).name}: Thợ Săn không bắn ai")
+        return NightResult()
+
+    result = apply_deaths(state, [Kill(target_id, KillSource.HUNTER)])
+    state.add_log(
+        f"{state.get(hunter_id).name} (Thợ Săn) bắn {state.get(target_id).name}"
+    )
     return result
 
 

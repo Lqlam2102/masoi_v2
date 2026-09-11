@@ -19,5 +19,5 @@ def all_roles() -> list[Role]:
 
 
 from app.game.roles import (  # noqa: E402,F401
-    cupid, guard, seer, villager, witch, wolf, wolf_seer,
+    cupid, guard, hunter, seer, villager, witch, wolf, wolf_seer,
 )
