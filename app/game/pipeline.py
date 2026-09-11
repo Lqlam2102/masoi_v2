@@ -45,6 +45,8 @@ def resolve_night(state: GameState, intents: list[Intent]) -> NightResult:
 
     for line in result.log:
         state.add_log(f"Đêm {state.night}: {line}")
+    guard_intent = next((i for i in intents if i.role_id == "guard"), None)
+    state.guard_last_target = guard_intent.targets[0] if guard_intent else None
     return result
 
 
