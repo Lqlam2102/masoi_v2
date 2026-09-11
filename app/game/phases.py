@@ -15,8 +15,6 @@ from app.game.state import Faction, GameState
 from app.game.votes import tally
 from app.game.winner import check_winner
 
-DAY_PHASES = ("night_result", "day_discuss", "day_vote", "day_result")
-
 
 def night_phase_order() -> list[tuple[int, str]]:
     """Các sub-pha đêm, sắp theo phase_order. Bầy sói gộp thành một pha."""
@@ -193,6 +191,8 @@ class PhaseMachine:
 
         self.last_result = apply_deaths(self.state, [Kill(victim, KillSource.LYNCH)])
         self.state.add_log(f"Ngày: {self.state.get(victim).name} bị treo cổ")
+        for line in self.last_result.log:
+            self.state.add_log(line)
         self.pending_hunters = list(self.last_result.pending_hunters)
         self._after_deaths(next_phase="day_result")
 

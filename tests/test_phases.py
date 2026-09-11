@@ -87,6 +87,29 @@ def test_treo_co_theo_da_so():
     assert state.get("an").death_reason == "lynch"
 
 
+def test_treo_co_keo_theo_nguoi_yeu_ghi_du_log():
+    # apply_deaths() lan chuỗi chết theo người yêu vào NightResult.log,
+    # nhưng không tự ghi vào state.log — _finish_day_vote() phải flush nó,
+    # y như resolve_night() và apply_hunter_shot() đã làm.
+    state = fixed_state(
+        lam="villager", an="wolf", binh="villager", hoa="villager", duc="villager"
+    )
+    state.get("lam").lover_id = "binh"
+    state.get("binh").lover_id = "lam"
+    machine = PhaseMachine(state)
+    machine.phase = "day_vote"
+    machine.submit_vote("an", "lam")
+    machine.submit_vote("hoa", "lam")
+    machine.submit_vote("duc", "lam")
+
+    machine.advance()
+
+    assert state.get("lam").alive is False
+    assert state.get("binh").alive is False
+    assert state.log.count("Ngày: Lam bị treo cổ") == 1
+    assert state.log.count("Binh: chết theo người yêu") == 1
+
+
 def test_treo_co_thang_ngo_ket_thuc_van():
     state = fixed_state(lam="fool", an="wolf", binh="villager", hoa="villager")
     machine = PhaseMachine(state)
