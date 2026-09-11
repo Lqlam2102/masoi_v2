@@ -24,6 +24,14 @@ class NightResult:
     log: list[str] = field(default_factory=list)
 
 
+def pending_bite(intents: list[Intent]) -> str | None:
+    """Nạn nhân bầy sói nhắm tới — Phù Thủy được biết trước khi quyết định."""
+    for intent in intents:
+        if intent.role_id == "wolf" and intent.targets:
+            return intent.targets[0]
+    return None
+
+
 def collect_effects(state: GameState, intents: list[Intent]) -> list[Effect]:
     """Chạy resolve() của từng vai theo đúng resolve_priority."""
     ordered = sorted(intents, key=lambda i: get_role(i.role_id).resolve_priority)

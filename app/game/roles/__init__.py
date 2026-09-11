@@ -18,4 +18,4 @@ def all_roles() -> list[Role]:
     return list(REGISTRY.values())
 
 
-from app.game.roles import guard, villager, wolf  # noqa: E402,F401
+from app.game.roles import guard, villager, witch, wolf  # noqa: E402,F401
