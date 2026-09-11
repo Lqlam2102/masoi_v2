@@ -61,3 +61,15 @@ def test_cap_doi_chet_chung_keo_theo_tho_san():
 
     assert {d.player_id for d in result.deaths} == {"lam", "binh"}
     assert result.pending_hunters == ["binh"]
+
+
+def test_phat_ban_giet_nguoi_co_nguoi_yeu_ghi_log_chet_theo():
+    state = make_state(lam="hunter", an="wolf", binh="villager")
+    state.get("lam").alive = False
+    state.get("an").lover_id = "binh"
+    state.get("binh").lover_id = "an"
+
+    result = apply_hunter_shot(state, "lam", "an")
+
+    assert {d.player_id for d in result.deaths} == {"an", "binh"}
+    assert "Binh: chết theo người yêu" in state.log

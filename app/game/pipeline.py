@@ -74,10 +74,13 @@ def apply_hunter_shot(
         state.add_log(f"{state.get(hunter_id).name}: Thợ Săn không bắn ai")
         return NightResult()
 
+    hunter_name = state.get(hunter_id).name
+    target_name = state.get(target_id).name
     result = apply_deaths(state, [Kill(target_id, KillSource.HUNTER)])
-    state.add_log(
-        f"{state.get(hunter_id).name} (Thợ Săn) bắn {state.get(target_id).name}"
-    )
+    result.log.insert(0, f"{hunter_name} (Thợ Săn) bắn {target_name}")
+
+    for line in result.log:
+        state.add_log(line)
     return result
 
 
