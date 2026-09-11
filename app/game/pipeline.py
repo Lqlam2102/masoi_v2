@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.game.effects import Effect, Kill, Reveal, resolve_damage
+from app.game.effects import Effect, Kill, KillSource, Pair, Reveal, resolve_damage
 from app.game.intents import Intent
 from app.game.roles import get_role
 from app.game.state import GameState
@@ -41,26 +41,44 @@ def collect_effects(state: GameState, intents: list[Intent]) -> list[Effect]:
     return effects
 
 
-def resolve_night(state: GameState, intents: list[Intent]) -> NightResult:
-    effects = collect_effects(state, intents)
-    reveals = [e for e in effects if isinstance(e, Reveal)]
+def apply_deaths(state: GameState, kills: list[Kill]) -> NightResult:
+    """Giết người và lan chuỗi chết (người yêu). Dùng cho cả đêm lẫn ngày."""
+    result = NightResult()
+    queue = list(kills)
+    while queue:
+        kill = queue.pop(0)
+        player = state.players.get(kill.target)
+        if player is None or not player.alive:
+            continue
 
-    landed, damage_log = resolve_damage(state, effects)
-    result = NightResult(reveals=reveals, log=list(damage_log))
+        player.alive = False
+        player.death_reason = kill.source.value
+        player.death_night = state.night
+        result.deaths.append(Death(player_id=player.id, source=kill.source.value))
 
-    for kill in landed:
-        _kill_player(state, kill, result)
-
-    for line in result.log:
-        state.add_log(f"Đêm {state.night}: {line}")
-    guard_intent = next((i for i in intents if i.role_id == "guard"), None)
-    state.guard_last_target = guard_intent.targets[0] if guard_intent else None
+        if player.lover_id and state.is_alive(player.lover_id):
+            lover = state.get(player.lover_id)
+            result.log.append(f"{lover.name}: chết theo người yêu")
+            queue.append(Kill(lover.id, KillSource.LOVER))
     return result
 
 
-def _kill_player(state: GameState, kill: Kill, result: NightResult) -> None:
-    player = state.get(kill.target)
-    player.alive = False
-    player.death_reason = kill.source.value
-    player.death_night = state.night
-    result.deaths.append(Death(player_id=player.id, source=kill.source.value))
+def resolve_night(state: GameState, intents: list[Intent]) -> NightResult:
+    effects = collect_effects(state, intents)
+
+    for pair in [e for e in effects if isinstance(e, Pair)]:
+        state.get(pair.a).lover_id = pair.b
+        state.get(pair.b).lover_id = pair.a
+
+    landed, damage_log = resolve_damage(state, effects)
+
+    result = apply_deaths(state, landed)
+    result.reveals = [e for e in effects if isinstance(e, Reveal)]
+    result.log = damage_log + result.log
+
+    guard_intent = next((i for i in intents if i.role_id == "guard"), None)
+    state.guard_last_target = guard_intent.targets[0] if guard_intent else None
+
+    for line in result.log:
+        state.add_log(f"Đêm {state.night}: {line}")
+    return result
