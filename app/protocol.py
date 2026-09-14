@@ -14,6 +14,8 @@ class JoinMsg(BaseModel):
 
 class ConfigMsg(BaseModel):
     type: Literal["config"]
+    # Client gửi `roles` dạng {role_id: bật/tắt}; `disabled_roles` là dạng cũ.
+    roles: dict[str, bool] = Field(default_factory=dict)
     disabled_roles: list[str] = Field(default_factory=list)
     timers: dict[str, int] = Field(default_factory=dict)
 
@@ -33,14 +35,47 @@ class VoteMsg(BaseModel):
     target: str | None = None
 
 
-ClientMsg = JoinMsg | ConfigMsg | StartMsg | ActionMsg | VoteMsg
+class LeaveMsg(BaseModel):
+    type: Literal["leave"]
+
+
+class SkipMsg(BaseModel):
+    type: Literal["skip"]
+
+
+class ChatMsg(BaseModel):
+    type: Literal["chat"]
+    text: str = ""
+
+
+class AdvanceMsg(BaseModel):
+    """Host chốt pha sớm, không chờ hết giờ."""
+
+    type: Literal["advance"]
+
+
+class RematchMsg(BaseModel):
+    """Host mở ván mới trong cùng phòng, kéo theo người đang ngồi chờ."""
+
+    type: Literal["rematch"]
+
+
+ClientMsg = (
+    JoinMsg | ConfigMsg | StartMsg | ActionMsg | VoteMsg | LeaveMsg | SkipMsg
+    | ChatMsg | AdvanceMsg | RematchMsg
+)
 
 _BY_TYPE: dict[str, type[BaseModel]] = {
-    "join": JoinMsg,
+    "join":   JoinMsg,
     "config": ConfigMsg,
-    "start": StartMsg,
+    "start":  StartMsg,
     "action": ActionMsg,
-    "vote": VoteMsg,
+    "vote":   VoteMsg,
+    "leave":  LeaveMsg,
+    "skip":   SkipMsg,
+    "chat":   ChatMsg,
+    "advance": AdvanceMsg,
+    "rematch": RematchMsg,
 }
 
 

@@ -1,118 +1,249 @@
-from __future__ import annotations
-
-import asyncio
 import os
-import time
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.game.intents import InvalidIntent
-from app.game.winner import WINNER_LABEL
 from app.protocol import parse_client_msg
-from app.room import Room, RoomManager
+from app.room import RoomManager, all_rooms, cleanup_empty_rooms, get_or_create_room, get_room
+from app.views import state_view
 
-app = FastAPI(title="Ma Sói")
+BASE_DIR = Path(__file__).parent
+STATIC_DIR = BASE_DIR / "static"
+
+app = FastAPI(title="Ma Sói Online")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Module-level globals expected by tests
 manager = RoomManager()
-connections: dict[str, dict[str, WebSocket]] = {}
+connections: dict[str, dict] = {}   # {room_code: {player_id: WebSocket}}
 
 
-async def broadcast(room: Room) -> None:
-    sockets = connections.get(room.code, {})
+@app.get("/")
+async def index():
+    return FileResponse(str(STATIC_DIR / "index.html"))
+
+
+@app.get("/api/rooms")
+async def list_rooms():
+    """Phòng đang mở, để sảnh chờ gợi ý cho người mới thay vì bắt gõ mã."""
+    cleanup_empty_rooms()
+    rooms = [r for r in all_rooms() if r.online_count > 0]
+    # Phòng còn chờ người xếp trước, rồi tới phòng đông nhất.
+    rooms.sort(key=lambda r: (r.in_game, -r.online_count))
+    return {"rooms": [r.summary() for r in rooms]}
+
+
+async def broadcast(room) -> None:
+    """Broadcast state to all connected sockets. Used by tests."""
     if room.machine is None:
-        for socket in list(sockets.values()):
-            await _safe_send(socket, room.lobby_view())
+        return
+    sockets = connections.get(room.code, {})
+    if not sockets:
         return
 
-    for player_id, view in room.views().items():
-        socket = sockets.get(player_id)
-        if socket is not None:
-            await _safe_send(socket, view)
-
-    # Ruling R5: mỗi reveal chỉ gửi một lần — xoá sau khi đã phát,
-    # nếu không Tiên Tri sẽ nhận lại cùng một dòng ở mỗi broadcast sau
-    # trong cùng pha.
-    if room.machine.last_result is not None:
+    # Send private reveals once then clear them
+    if room.machine.last_result:
         for reveal in room.machine.last_result.reveals:
-            socket = sockets.get(reveal.actor)
-            if socket is not None:
-                await _safe_send(socket, {"type": "private", "text": reveal.text})
+            sock = sockets.get(reveal.actor)
+            if sock:
+                try:
+                    await sock.send_json({"type": "private", "text": reveal.text})
+                except Exception:
+                    pass
         room.machine.last_result.reveals = []
 
-    if room.is_over():
-        payload = {
-            "type": "game_over",
-            "winner": room.machine.winner,
-            "label": WINNER_LABEL[room.machine.winner],
-            "roles": {
-                p.id: p.role_id for p in room.machine.state.players.values()
-            },
-            "full_log": room.machine.state.log,
-        }
-        for socket in list(sockets.values()):
-            await _safe_send(socket, payload)
-
-
-async def _safe_send(socket: WebSocket, payload: dict) -> None:
-    try:
-        await socket.send_json(payload)
-    except (WebSocketDisconnect, RuntimeError):
-        pass
-
-
-async def phase_clock(room: Room) -> None:
-    """Một task duy nhất cho mỗi phòng: hết giờ thì tự chuyển pha."""
-    while not room.is_over():
-        await asyncio.sleep(0.5)
-        if room.deadline is not None and time.time() >= room.deadline:
-            room.advance()
-            await broadcast(room)
+    for pid, sock in sockets.items():
+        view = state_view(room.machine, pid, None)
+        try:
+            await sock.send_json(view)
+        except Exception:
+            pass
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(socket: WebSocket) -> None:
-    await socket.accept()
-    room: Room | None = None
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
     player_id: str | None = None
+    room = None
 
     try:
-        first = parse_client_msg(await socket.receive_json())
-        if first.type != "join":
-            await socket.send_json({"type": "error", "message": "Phải join trước"})
+        # ── Bước 1: nhận message join ──
+        try:
+            raw = await ws.receive_json()
+        except Exception as e:
+            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.close()
             return
 
-        room = manager.get(first.room or "") or manager.create()
-        player_id, token = room.join(first.name, first.token)
-        connections.setdefault(room.code, {})[player_id] = socket
-        await socket.send_json(
-            {
-                "type": "joined",
-                "you": {"id": player_id, "name": first.name},
-                "token": token,
-                "room": room.code,
-                "is_host": player_id == room.host_id,
-            }
-        )
-        await broadcast(room)
+        # raw phải là dict
+        if not isinstance(raw, dict):
+            await ws.send_json({"type": "error", "message": "Frame phải là JSON object"})
+            await ws.close()
+            return
 
+        try:
+            msg = parse_client_msg(raw)
+        except ValueError as e:
+            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.close()
+            return
+
+        if msg.type != "join":
+            await ws.send_json({
+                "type": "error",
+                "message": "Tin nhắn đầu tiên phải là join",
+            })
+            await ws.close()
+            return
+
+        # ── Tìm / tạo phòng ──
+        room_code = msg.room.strip().upper() if msg.room else None
+
+        if msg.token:
+            room = next(
+                (r for r in all_rooms() if msg.token in r.token_index), None
+            )
+            # Also search module-level manager rooms
+            if room is None:
+                for r in manager._rooms.values():
+                    if msg.token in r.token_index:
+                        room = r
+                        break
+            if room is None:
+                await ws.send_json({
+                    "type": "error",
+                    "message": "Token không hợp lệ hoặc phòng đã đóng",
+                })
+                await ws.close()
+                return
+        elif room_code:
+            room = get_room(room_code)
+            if room is None:
+                room = manager.get(room_code)
+            if room is None:
+                await ws.send_json({
+                    "type": "error",
+                    "message": f"Phòng {room_code} không tồn tại",
+                })
+                await ws.close()
+                return
+        else:
+            room, _ = get_or_create_room(None)
+
+        try:
+            player_id, token, is_host = room.join_or_reconnect(
+                ws, msg.name, msg.token
+            )
+        except ValueError as e:
+            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.close()
+            return
+
+        # ── Xác nhận join ──
+        await ws.send_json({
+            "type": "joined",
+            "you": {"id": player_id, "name": room.names.get(player_id, "")},
+            "token": token,
+            "room": room.code,
+            "is_host": is_host,
+            "waiting": player_id in room.pending,
+        })
+
+        # ── Gửi state hiện tại ──
+        if player_id in room.pending:
+            # Vào giữa ván: chỉ thấy màn hình chờ, tuyệt đối không thấy state.
+            # broadcast_waiting cập nhật luôn cho những người đã chờ sẵn.
+            await room.broadcast_waiting()
+        elif room.machine is not None:
+            view = state_view(
+                room.machine, player_id, room._deadline,
+                room.phase_duration(room.machine.phase),
+            )
+            view["is_host"] = player_id == room.host_id
+            await ws.send_json(view)
+            # Vào lại giữa ván vẫn đọc được những gì đồng đội đã nói.
+            history = room.chat_history_for(player_id)
+            if history:
+                await ws.send_json({"type": "chat_history", "messages": history})
+        else:
+            await _broadcast_lobby(room)
+
+        # ── Vòng lắng nghe ──
         while True:
-            raw = await socket.receive_json()
             try:
-                was_lobby = room.machine is None
-                room.handle(player_id, raw)
-                if was_lobby and room.machine is not None:
-                    asyncio.create_task(phase_clock(room))
-            except (InvalidIntent, ValueError) as exc:
-                await socket.send_json({"type": "error", "message": str(exc)})
+                raw = await ws.receive_json()
+            except WebSocketDisconnect:
+                raise
+            except Exception as e:
+                await ws.send_json({"type": "error", "message": str(e)})
                 continue
-            await broadcast(room)
+
+            if not isinstance(raw, dict):
+                await ws.send_json({"type": "error", "message": "Frame phải là JSON object"})
+                continue
+
+            try:
+                msg = parse_client_msg(raw)
+            except ValueError as e:
+                await ws.send_json({"type": "error", "message": str(e)})
+                continue
+
+            if msg.type == "config":
+                await room.handle_config(player_id, msg)
+            elif msg.type == "start":
+                await room.handle_start(player_id)
+            elif msg.type == "action":
+                await room.handle_action(player_id, msg)
+            elif msg.type == "vote":
+                await room.handle_vote(player_id, msg)
+            elif msg.type == "skip":
+                await room.handle_pass(player_id)
+            elif msg.type == "chat":
+                await room.handle_chat(player_id, msg)
+            elif msg.type == "advance":
+                await room.handle_advance(player_id)
+            elif msg.type == "rematch":
+                await room.handle_rematch(player_id)
+                if room.machine is None:
+                    await _broadcast_lobby(room)
+            elif msg.type == "leave":
+                # Acknowledge first, then break — finally block cleans up
+                await ws.send_json({"type": "left", "message": "Bạn đã rời phòng"})
+                break
 
     except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await ws.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
         if room and player_id:
-            connections.get(room.code, {}).pop(player_id, None)
+            room.leave_room(player_id)
+            if not room.empty:
+                # Ván đang chạy thì người trong ván không cần tin lobby —
+                # chỉ cập nhật danh sách cho những người đang ngồi chờ.
+                if room.machine is None:
+                    await _broadcast_lobby(room)
+                elif room.pending:
+                    await room.broadcast_waiting()
+        cleanup_empty_rooms()
 
 
-# static/ được .gitignore và trống tại HEAD — Task 16-17 mới đổ frontend vào.
-# Tạo thư mục nếu chưa có để StaticFiles không crash khi khởi động.
-os.makedirs("static", exist_ok=True)
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+async def _broadcast_lobby(room) -> None:
+    await room.broadcast({
+        "type": "lobby",
+        "room": room.code,
+        "players": [
+            {
+                "id": pid,
+                "name": name,
+                "online": room.connections.get(pid) is not None,
+            }
+            for pid, name in room.names.items()
+        ],
+        "host": room.host_id,
+    })

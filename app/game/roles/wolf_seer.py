@@ -19,9 +19,17 @@ class WolfSeer(Role):
     resolve_priority = 25
     acts_on_night = "every"
 
-    def resolve(self, state: GameState, intent: Intent) -> list[Effect]:
+    def _verdict(self, state: GameState, target_id: str) -> str:
         from app.game.roles import get_role
 
-        target = state.get(intent.targets[0])
-        role_name = get_role(target.role_id).name
-        return [Reveal(intent.actor_id, target.id, f"{target.name} là {role_name}")]
+        target = state.get(target_id)
+        return f"{target.name} là {get_role(target.role_id).name}"
+
+    def resolve(self, state: GameState, intent: Intent) -> list[Effect]:
+        return [
+            Reveal(intent.actor_id, intent.targets[0],
+                   self._verdict(state, intent.targets[0]))
+        ]
+
+    def instant_reveal(self, state: GameState, intent: Intent) -> str | None:
+        return self._verdict(state, intent.targets[0])

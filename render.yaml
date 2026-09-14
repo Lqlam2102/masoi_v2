@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: masoi
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    # Một worker duy nhất — phòng chơi nằm trong RAM (_ROOMS ở app/room.py),
+    # chạy nhiều worker thì mỗi worker có một bản phòng riêng, người chơi
+    # vào cùng mã phòng sẽ rơi vào các ván khác nhau.
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /

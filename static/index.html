@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f0a1a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Ma Sói Online</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<div id="screen-home" class="screen active">
+  <div class="home-bg"><div class="moon"></div><div class="stars"></div></div>
+  <div class="home-content">
+    <div class="logo">
+      <span class="logo-icon">🐺</span>
+      <h1 class="logo-title">Ma Sói</h1>
+      <p class="logo-sub">Online</p>
+    </div>
+    <div class="card home-card">
+      <div class="form-group">
+        <label for="input-name">Tên của bạn</label>
+        <input id="input-name" type="text" placeholder="Nhập tên…" maxlength="20" autocomplete="off" />
+      </div>
+      <button id="btn-create" class="btn btn-primary btn-lg"><span class="btn-icon">✦</span> Tạo phòng mới</button>
+      <div class="divider"><span>hoặc</span></div>
+      <div class="join-row">
+        <input id="input-room" type="text" placeholder="Mã phòng (VD: AB12)" maxlength="4" class="input-room" autocomplete="off" />
+        <button id="btn-join" class="btn btn-outline">Vào phòng</button>
+      </div>
+    </div>
+    <div class="card room-browse-card">
+      <div class="room-browse-head">
+        <h2 class="section-title">Phòng đang mở <span id="room-count" class="badge">0</span></h2>
+        <button id="btn-refresh-rooms" class="btn btn-ghost btn-sm" title="Làm mới">⟳</button>
+      </div>
+      <div id="room-list" class="room-list"></div>
+    </div>
+    <p class="home-note">Tranh luận qua voice bên ngoài (Discord, Zoom…)</p>
+  </div>
+</div>
+<div id="screen-wait" class="screen">
+  <div class="home-bg"><div class="moon"></div><div class="stars"></div></div>
+  <div class="wait-content">
+    <div class="wait-spinner">⏳</div>
+    <h2 class="wait-title">Đang chờ ván kết thúc</h2>
+    <p class="wait-sub">Bạn sẽ được xếp ghế ngay khi host mở ván mới.</p>
+    <div class="card wait-card">
+      <div class="wait-row"><span>Phòng</span><strong id="wait-room">----</strong></div>
+      <div class="wait-row"><span>Host</span><strong id="wait-host">—</strong></div>
+      <div class="wait-row"><span>Đang chơi</span><strong id="wait-playing">0 người</strong></div>
+      <div class="wait-row"><span>Đêm</span><strong id="wait-night">—</strong></div>
+    </div>
+    <div class="card wait-card">
+      <h3 class="section-title">Cùng chờ với bạn <span id="wait-count" class="badge">0</span></h3>
+      <div id="wait-others" class="wait-others"></div>
+    </div>
+    <button id="btn-leave-wait" class="btn btn-outline btn-lg mt-2">Rời phòng</button>
+  </div>
+</div>
+<div id="screen-lobby" class="screen">
+  <header class="top-bar">
+    <div class="room-badge">Phòng <span id="lobby-code">----</span></div>
+    <div class="top-bar-actions">
+      <button id="btn-copy-code" class="btn btn-icon-only" title="Sao chép mã phòng">⎘</button>
+      <button id="btn-leave-lobby" class="btn btn-icon-only btn-leave" title="Rời phòng">✕</button>
+    </div>
+  </header>
+  <div class="lobby-body">
+    <div class="card">
+      <h2 class="section-title">Người chơi <span id="lobby-count" class="badge">0</span></h2>
+      <ul id="lobby-players" class="player-list"></ul>
+    </div>
+    <div id="host-controls" class="card host-panel" style="display:none">
+      <h2 class="section-title">Cấu hình vai</h2>
+
+      <!-- Tabs -->
+      <div class="cfg-tabs">
+        <button class="cfg-tab active" data-tab="roles">🃏 Bộ vai</button>
+        <button class="cfg-tab" data-tab="timers">⏱ Thời gian</button>
+      </div>
+
+      <!-- Tab: Roles -->
+      <div id="cfg-tab-roles" class="cfg-tab-body">
+        <div class="cfg-info-row">
+          <span id="cfg-player-hint" class="cfg-hint">Đang chờ người chơi…</span>
+          <button id="btn-preset" class="btn btn-ghost btn-sm">↺ Mặc định</button>
+        </div>
+        <!-- Role count rows -->
+        <div id="role-config-list" class="role-config-list"></div>
+        <!-- Preview bộ vai -->
+        <div class="role-preview-wrap">
+          <span class="cfg-hint">Bộ vai sẽ dùng:</span>
+          <div id="role-preview-chips" class="role-preview-chips"></div>
+        </div>
+      </div>
+
+      <!-- Tab: Timers -->
+      <div id="cfg-tab-timers" class="cfg-tab-body" style="display:none">
+        <div class="timer-row">
+          <label>Pha đêm (mỗi vai)</label>
+          <div class="stepper">
+            <button class="step-btn" data-timer="night_phase" data-dir="-1">−</button>
+            <span class="step-val" id="timer-night_phase">60</span><span class="step-unit">s</span>
+            <button class="step-btn" data-timer="night_phase" data-dir="1">+</button>
+          </div>
+        </div>
+        <div class="timer-row">
+          <label>Tranh luận ngày</label>
+          <div class="stepper">
+            <button class="step-btn" data-timer="day_discuss" data-dir="-1">−</button>
+            <span class="step-val" id="timer-day_discuss">180</span><span class="step-unit">s</span>
+            <button class="step-btn" data-timer="day_discuss" data-dir="1">+</button>
+          </div>
+        </div>
+        <div class="timer-row">
+          <label>Bỏ phiếu</label>
+          <div class="stepper">
+            <button class="step-btn" data-timer="day_vote" data-dir="-1">−</button>
+            <span class="step-val" id="timer-day_vote">75</span><span class="step-unit">s</span>
+            <button class="step-btn" data-timer="day_vote" data-dir="1">+</button>
+          </div>
+        </div>
+        <div class="timer-row">
+          <label>Thợ Săn bắn</label>
+          <div class="stepper">
+            <button class="step-btn" data-timer="hunter_shot" data-dir="-1">−</button>
+            <span class="step-val" id="timer-hunter_shot">45</span><span class="step-unit">s</span>
+            <button class="step-btn" data-timer="hunter_shot" data-dir="1">+</button>
+          </div>
+        </div>
+      </div>
+
+      <button id="btn-start" class="btn btn-primary btn-lg mt-2">🌙 Bắt đầu ván</button>
+    </div>
+    <p id="lobby-waiting" class="waiting-text" style="display:none">Chờ host bắt đầu…</p>
+
+    <!-- Role guide for non-host: link to open guide -->
+    <div class="card" id="role-guide-card">
+      <button id="btn-open-guide" class="btn-role-guide-open">
+        📖 Xem hướng dẫn vai trò
+      </button>
+    </div>
+  </div>
+</div>
+<div id="screen-game" class="screen">
+  <header class="game-header">
+    <div class="game-phase-info">
+      <span id="game-phase-label" class="phase-label">--</span>
+      <span id="game-night-label" class="night-label"></span>
+    </div>
+    <div class="header-right">
+      <span id="countdown-text" class="countdown-text" data-countdown></span>
+      <button id="btn-leave-game" class="btn btn-icon-only btn-leave" title="Rời ván">✕</button>
+    </div>
+    <div id="countdown-bar-wrap" class="countdown-wrap">
+      <div id="countdown-bar" class="countdown-bar"></div>
+    </div>
+  </header>
+  <div id="host-bar" class="host-bar" style="display:none">
+    <span class="host-bar-label">👑 Quyền host</span>
+    <button id="btn-force-advance" class="btn btn-outline btn-sm">⏭ Kết thúc sớm</button>
+  </div>
+  <div id="my-role-card" class="my-role-card">
+    <span id="my-role-icon" class="role-icon"></span>
+    <div class="my-role-info">
+      <span id="my-role-name" class="role-name"></span>
+      <span id="my-faction-badge" class="faction-badge"></span>
+    </div>
+    <button id="btn-my-role-info" class="btn-role-info" title="Xem luật vai">?</button>
+    <span id="my-alive-status" class="alive-status"></span>
+  </div>
+  <div class="players-section">
+    <h3 class="section-title">Người chơi</h3>
+    <div id="game-players" class="player-grid"></div>
+  </div>
+  <div id="vote-board" class="vote-board" style="display:none">
+    <div class="vote-board-head">
+      <span id="vote-board-title" class="vote-board-title"></span>
+      <span id="vote-board-status" class="vote-board-status"></span>
+    </div>
+    <div id="vote-board-rows" class="vote-board-rows"></div>
+    <div id="vote-board-pending" class="vote-board-pending"></div>
+  </div>
+  <div id="chat-panel" class="chat-panel" style="display:none">
+    <div class="chat-head">
+      <span id="chat-title" class="chat-title">💬 Trò chuyện</span>
+      <span id="chat-note" class="chat-note"></span>
+    </div>
+    <div id="chat-messages" class="chat-messages"></div>
+    <form id="chat-form" class="chat-form" autocomplete="off">
+      <input id="chat-input" class="chat-input" type="text" maxlength="300" placeholder="Nhắn cho đồng đội…" />
+      <button id="chat-send" class="chat-send" type="submit" aria-label="Gửi">➤</button>
+    </form>
+  </div>
+  <div id="action-panel" class="action-panel" style="display:none">
+    <div class="action-header">
+      <div class="action-header-main">
+        <span id="action-title" class="action-title"></span>
+        <span id="action-hint" class="action-hint"></span>
+      </div>
+      <span class="action-timer" data-countdown></span>
+    </div>
+    <div id="action-candidates" class="candidates-list"></div>
+    <div id="witch-panel" class="witch-panel" style="display:none">
+      <div id="witch-bitten-info" class="witch-bitten"></div>
+      <div class="witch-actions">
+        <button id="btn-witch-heal" class="witch-btn witch-btn-heal">
+          <span class="witch-btn-icon">🧪</span>
+          <span class="witch-btn-text">Bình cứu</span>
+          <span id="witch-heal-state" class="witch-btn-state"></span>
+        </button>
+        <button id="btn-witch-poison" class="witch-btn witch-btn-poison">
+          <span class="witch-btn-icon">☠️</span>
+          <span class="witch-btn-text">Bình độc</span>
+          <span id="witch-poison-state" class="witch-btn-state"></span>
+        </button>
+      </div>
+      <div id="witch-poison-target" style="display:none">
+        <p class="action-hint">Chọn người để đầu độc:</p>
+        <div id="witch-poison-candidates" class="candidates-list"></div>
+      </div>
+      <div id="witch-choice" class="witch-choice" style="display:none"></div>
+    </div>
+    <div class="action-footer">
+      <button id="btn-skip-action" class="btn btn-ghost">Bỏ qua</button>
+      <button id="btn-confirm-action" class="btn btn-primary" disabled>Xác nhận</button>
+    </div>
+  </div>
+  <div id="night-result-panel" class="result-panel" style="display:none">
+    <h3 class="result-title" id="result-panel-title">Kết quả</h3>
+    <div id="result-deaths" class="result-deaths"></div>
+    <div id="result-log" class="result-log"></div>
+    <button id="btn-result-ok" class="btn btn-primary btn-lg mt-2">Tiếp tục →</button>
+  </div>
+  <div class="log-section">
+    <details id="log-details">
+      <summary class="log-summary">📜 Nhật ký (<span id="log-count">0</span>)</summary>
+      <div id="log-list" class="log-list"></div>
+    </details>
+  </div>
+</div>
+<div id="screen-over" class="screen">
+  <div class="over-bg"><div class="moon"></div><div class="stars"></div></div>
+  <div class="over-content">
+    <div id="winner-banner" class="winner-banner">
+      <span id="winner-icon" class="winner-icon"></span>
+      <h2 id="winner-label" class="winner-label"></h2>
+    </div>
+    <div class="card">
+      <h3 class="section-title">Vai của mọi người</h3>
+      <ul id="over-roles" class="player-list"></ul>
+    </div>
+    <div class="card">
+      <details>
+        <summary class="log-summary">📜 Nhật ký đầy đủ</summary>
+        <div id="over-log" class="log-list"></div>
+      </details>
+    </div>
+    <div id="over-waiting-note" class="over-waiting-note" style="display:none"></div>
+    <button id="btn-rematch" class="btn btn-primary btn-lg mt-2">🔄 Chơi ván mới</button>
+    <p id="over-wait-host" class="waiting-text" style="display:none">Chờ host mở ván mới…</p>
+    <button id="btn-play-again" class="btn btn-ghost mt-2">← Về trang chủ</button>
+  </div>
+</div>
+<!-- ══════════════════════════════════════════
+     MODAL: ROLE DETAIL
+══════════════════════════════════════════ -->
+<div id="modal-role" class="modal-backdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-role-title">
+  <div class="modal-sheet">
+    <button class="modal-close" id="btn-modal-role-close" aria-label="Đóng">✕</button>
+    <div class="modal-role-header">
+      <span id="modal-role-icon" class="modal-role-icon"></span>
+      <div>
+        <h2 id="modal-role-title" class="modal-role-name"></h2>
+        <span id="modal-role-faction" class="faction-badge"></span>
+      </div>
+    </div>
+    <p id="modal-role-desc" class="modal-role-desc"></p>
+    <div id="modal-role-rules" class="modal-role-rules"></div>
+    <div id="modal-role-tip" class="modal-role-tip"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MODAL: ROLE GUIDE (all roles)
+══════════════════════════════════════════ -->
+<div id="modal-guide" class="modal-backdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-guide-title">
+  <div class="modal-sheet modal-sheet-tall">
+    <button class="modal-close" id="btn-modal-guide-close" aria-label="Đóng">✕</button>
+    <h2 id="modal-guide-title" class="modal-guide-title">📖 Hướng dẫn vai trò</h2>
+    <div class="guide-tabs">
+      <button class="guide-tab active" data-faction="all">Tất cả</button>
+      <button class="guide-tab" data-faction="village">🌿 Phe Dân</button>
+      <button class="guide-tab" data-faction="wolf">🐺 Phe Sói</button>
+    </div>
+    <div id="guide-role-list" class="guide-role-list"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MODAL: CONFIRM LEAVE
+══════════════════════════════════════════ -->
+<div id="modal-leave" class="modal-backdrop" style="display:none" role="dialog" aria-modal="true">
+  <div class="modal-sheet modal-sheet-compact">
+    <div class="modal-leave-icon">🚪</div>
+    <h3 id="modal-leave-title" class="modal-leave-title">Rời phòng?</h3>
+    <p id="modal-leave-body" class="modal-leave-body">Bạn sẽ bị xóa khỏi phòng và cần nhập lại mã để tham gia.</p>
+    <div class="modal-leave-actions">
+      <button id="btn-leave-cancel" class="btn btn-outline">Ở lại</button>
+      <button id="btn-leave-confirm" class="btn btn-danger">Rời phòng</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     OVERLAY: CHUYỂN PHA (bình minh, màn đêm, phiên toà…)
+══════════════════════════════════════════ -->
+<div id="phase-overlay" class="phase-overlay" aria-hidden="true">
+  <div class="phase-overlay-inner">
+    <span id="phase-overlay-icon" class="phase-overlay-icon"></span>
+    <h2 id="phase-overlay-title" class="phase-overlay-title"></h2>
+    <p id="phase-overlay-sub" class="phase-overlay-sub"></p>
+  </div>
+</div>
+
+<button id="btn-sound" class="btn-sound" title="Bật/tắt âm thanh" aria-label="Bật/tắt âm thanh">🔊</button>
+
+<div id="toast" class="toast" aria-live="polite"></div>
+<script src="/static/sfx.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

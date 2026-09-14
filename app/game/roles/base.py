@@ -43,3 +43,11 @@ class Role:
 
     def resolve(self, state: GameState, intent: Intent) -> list[Effect]:
         return []
+
+    def instant_reveal(self, state: GameState, intent: Intent) -> str | None:
+        """Thông tin vai tự biết ngay khi hành động, thay vì đợi tới bình minh.
+
+        Chỉ dùng cho thông tin không phụ thuộc hành động của người khác
+        (phe/vai của mục tiêu là cố định), nên tính sớm vẫn đúng kết quả.
+        """
+        return None

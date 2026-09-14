@@ -17,10 +17,19 @@ class Seer(Role):
     resolve_priority = 20
     acts_on_night = "every"
 
-    def resolve(self, state: GameState, intent: Intent) -> list[Effect]:
+    def _verdict(self, state: GameState, target_id: str) -> str:
         from app.game.roles import get_role
 
-        target = state.get(intent.targets[0])
+        target = state.get(target_id)
         is_wolf = get_role(target.role_id).faction is Faction.WOLF
         verdict = "thuộc phe Sói" if is_wolf else "KHÔNG thuộc phe Sói"
-        return [Reveal(intent.actor_id, target.id, f"{target.name} {verdict}")]
+        return f"{target.name} {verdict}"
+
+    def resolve(self, state: GameState, intent: Intent) -> list[Effect]:
+        return [
+            Reveal(intent.actor_id, intent.targets[0],
+                   self._verdict(state, intent.targets[0]))
+        ]
+
+    def instant_reveal(self, state: GameState, intent: Intent) -> str | None:
+        return self._verdict(state, intent.targets[0])

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.game.effects import Kill, KillSource
+from app.game.effects import Kill, KillSource, Reveal
 from app.game.intents import Intent, InvalidIntent
 from app.game.pipeline import (
     PACK_ACTOR,
@@ -37,6 +37,11 @@ class PhaseMachine:
         self.winner: str | None = None
         self.last_result: NightResult | None = None
         self.pending_hunters: list[str] = []
+        # Ai đã chủ động bỏ lượt trong pha hiện tại.
+        self.passed: set[str] = set()
+        # Reveal gửi ngay lúc hành động (Tiên Tri), chờ lớp Room lấy đi.
+        self.instant_reveals: list[Reveal] = []
+        self._delivered_reveals: set[tuple[str, str]] = set()
 
     # ---------- mở pha ----------
 
@@ -57,11 +62,9 @@ class PhaseMachine:
 
         for _, phase_name in order[start_index:]:
             if self._actors_for(phase_name):
-                self.phase = phase_name
-                self.state.phase = phase_name
+                self._set_phase(phase_name)
                 return
-        self.phase = "night_result"
-        self.state.phase = "night_result"
+        self._set_phase("night_result")
 
     def _actors_for(self, phase_name: str) -> list[str]:
         """Ai còn sống và được hành động trong sub-pha này."""
@@ -110,31 +113,56 @@ class PhaseMachine:
             return
 
         intent = Intent(actor_id, role_id, targets, extra or {})
-        get_role(role_id).validate(self.state, intent)
+        role = get_role(role_id)
+        role.validate(self.state, intent)
         self.night_intents = [i for i in self.night_intents if i.actor_id != actor_id]
         self.night_intents.append(intent)
+        self.passed.discard(actor_id)
+        self._queue_instant_reveal(role, intent)
+
+    def _queue_instant_reveal(self, role, intent: Intent) -> None:
+        """Vai soi biết kết quả ngay trong lượt của mình, không đợi tới sáng."""
+        text = role.instant_reveal(self.state, intent)
+        if not text:
+            return
+        self.instant_reveals.append(Reveal(intent.actor_id, intent.targets[0], text))
+        self._delivered_reveals.add((intent.actor_id, text))
+
+    def take_instant_reveals(self) -> list[Reveal]:
+        pending, self.instant_reveals = self.instant_reveals, []
+        return pending
+
+    def submit_pass(self, actor_id: str) -> None:
+        """Người chơi chủ động bỏ lượt — tính là đã hành động."""
+        if actor_id not in self.current_actors():
+            raise InvalidIntent("Không phải lượt của bạn")
+        self.passed.add(actor_id)
+        if self.phase == "day_vote":
+            self.votes.pop(actor_id, None)
 
     def submit_vote(self, voter_id: str, target_id: str | None) -> None:
         if voter_id not in [p.id for p in self.state.alive_players()]:
             raise InvalidIntent("Người chết không được bỏ phiếu")
         if target_id is None:
             self.votes.pop(voter_id, None)
+            self.passed.add(voter_id)   # phiếu trắng vẫn là đã quyết định
             return
         if not self.state.is_alive(target_id):
             raise InvalidIntent("Mục tiêu không hợp lệ")
         self.votes[voter_id] = target_id
+        self.passed.discard(voter_id)
 
     def everyone_acted(self) -> bool:
         actors = set(self.current_actors())
         if not actors:
             return True
         if self.phase == "night_wolf":
-            return actors <= set(self.wolf_votes)
+            return actors <= set(self.wolf_votes) | self.passed
         if self.phase == "day_vote":
-            return actors <= set(self.votes)
+            return actors <= set(self.votes) | self.passed
         if self.phase == "hunter_shot":
-            return hasattr(self, "_hunter_target")
-        return actors <= {i.actor_id for i in self.night_intents}
+            return hasattr(self, "_hunter_target") or bool(actors & self.passed)
+        return actors <= {i.actor_id for i in self.night_intents} | self.passed
 
     def bite_target_for_witch(self) -> str | None:
         return pending_bite(self._pack_intents())
@@ -171,10 +199,17 @@ class PhaseMachine:
     def _set_phase(self, name: str) -> str:
         self.phase = name
         self.state.phase = name
+        self.passed = set()
         return name
 
     def _finish_night(self) -> None:
         self.last_result = resolve_night(self.state, self.night_intents)
+        # Reveal đã báo ngay trong đêm thì không lặp lại lúc bình minh.
+        self.last_result.reveals = [
+            r for r in self.last_result.reveals
+            if (r.actor, r.text) not in self._delivered_reveals
+        ]
+        self._delivered_reveals.clear()
         self.pending_hunters = list(self.last_result.pending_hunters)
         self._after_deaths(next_phase="day_discuss")
 
