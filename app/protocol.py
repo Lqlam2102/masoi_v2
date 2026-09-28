@@ -18,6 +18,10 @@ class ConfigMsg(BaseModel):
     roles: dict[str, bool] = Field(default_factory=dict)
     disabled_roles: list[str] = Field(default_factory=list)
     timers: dict[str, int] = Field(default_factory=dict)
+    # Cài đặt tuỳ chọn — có thể gửi bất kỳ lúc nào (kể cả sau ván)
+    reveal_role_on_death: bool | None = None
+    # Danh sách role đầy đủ do host tự cấu hình (flat list, len == số người chơi)
+    role_list: list[str] = Field(default_factory=list)
 
 
 class StartMsg(BaseModel):

@@ -5,13 +5,16 @@ from app.game.roles import get_role
 from app.game.state import Faction, GameState
 
 
-def can_see_role(state: GameState, viewer_id: str, target_id: str) -> bool:
+def can_see_role(state: GameState, viewer_id: str, target_id: str,
+                 reveal_role_on_death: bool = True) -> bool:
     """Xem spec mục 9 — nguyên tắc bảo mật thông tin."""
     viewer = state.players.get(viewer_id)
     target = state.players.get(target_id)
     if viewer is None or target is None:
         return False
-    if viewer_id == target_id or not target.alive:
+    if viewer_id == target_id:
+        return True
+    if not target.alive and reveal_role_on_death:
         return True
     if viewer.lover_id == target_id:
         return True
@@ -126,6 +129,7 @@ def state_view(
     viewer_id: str,
     deadline: float | None,
     duration: int | None = None,
+    reveal_role_on_death: bool = True,
 ) -> dict:
     state = machine.state
     return {
@@ -139,9 +143,9 @@ def state_view(
                 "id": p.id,
                 "name": p.name,
                 "alive": p.alive,
-                "role": p.role_id if can_see_role(state, viewer_id, p.id) else None,
+                "role": p.role_id if can_see_role(state, viewer_id, p.id, reveal_role_on_death) else None,
                 "role_name": get_role(p.role_id).name
-                if can_see_role(state, viewer_id, p.id)
+                if can_see_role(state, viewer_id, p.id, reveal_role_on_death)
                 else None,
             }
             for p in state.players.values()

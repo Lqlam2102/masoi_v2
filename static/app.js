@@ -206,6 +206,8 @@ let timers = { night_phase: 60, day_discuss: 180, day_vote: 75, hunter_shot: 45 
 let roleCounts = {};
 // current player count in room
 let playerCount = 0;
+// cài đặt phòng — đồng bộ từ server
+let revealRoleOnDeath = true;
 
 const $ = id => document.getElementById(id);
 
@@ -291,7 +293,15 @@ function handleServerMsg(msg) {
       if (sessionJoined) showToast(msg.message, 'error');
       else resetToHome(msg.message);
       break;
-    case 'config_ok':    showToast('Đã lưu cài đặt ✓', 'success'); break;
+    case 'config_ok':
+      if (msg.reveal_role_on_death != null) {
+        revealRoleOnDeath = msg.reveal_role_on_death;
+        // Re-render toggle nếu đang ở màn game_over
+        const overConfig = $('over-host-config');
+        if (overConfig && overConfig.style.display !== 'none') renderOverConfig();
+      }
+      showToast('Đã lưu cài đặt ✓', 'success');
+      break;
   }
 }
 
@@ -300,6 +310,10 @@ function handleJoined(msg) {
   myId = msg.you.id; myToken = msg.token; myRoom = msg.room; isHost = msg.is_host;
   localStorage.setItem('masoi_token', myToken);
   $('lobby-code').textContent = myRoom;
+  if (msg.settings) {
+    if (msg.settings.reveal_role_on_death != null)
+      revealRoleOnDeath = msg.settings.reveal_role_on_death;
+  }
   stopRoomPolling();
   // Vào giữa ván: để message `waiting` quyết định màn hình, đừng nhảy vào lobby.
   if (!msg.waiting) showScreen('screen-lobby');
@@ -326,7 +340,9 @@ async function refreshRooms() {
   }
   rooms.forEach(r => {
     const playing = r.status === 'playing';
-    const full = r.players >= r.max;
+    const gameOver = r.game_over === true;   // ván vừa xong, chưa rematch
+    const canJoin = !playing && !gameOver;   // lobby thực sự
+    const full = r.players >= r.max && !gameOver;
     const row = document.createElement('div');
     row.className = 'room-row' + (playing ? ' room-playing' : '');
     row.innerHTML = `
@@ -338,11 +354,11 @@ async function refreshRooms() {
         </div>
       </div>
       <div class="room-side">
-        <span class="room-status ${playing ? 'rs-playing' : 'rs-open'}">
-          ${playing ? `🌙 Đêm ${r.night}` : `🕐 Đang chờ`}
+        <span class="room-status ${playing ? 'rs-playing' : (gameOver ? 'rs-over' : 'rs-open')}">
+          ${playing ? `🌙 Đêm ${r.night}` : (gameOver ? '🏁 Ván xong' : `🕐 Đang chờ`)}
         </span>
-        <button class="btn btn-sm ${playing ? 'btn-outline' : 'btn-primary'}" ${full ? 'disabled' : ''}>
-          ${full ? 'Đầy' : (playing ? 'Chờ ván sau' : 'Vào')}
+        <button class="btn btn-sm ${canJoin && !full ? 'btn-primary' : 'btn-outline'}" ${full ? 'disabled' : ''}>
+          ${full ? 'Đầy' : (playing ? 'Chờ ván sau' : (gameOver ? 'Vào phòng' : 'Vào'))}
         </button>
       </div>`;
     if (!full) row.querySelector('button').addEventListener('click', () => joinRoom(r.code, playing));
@@ -419,7 +435,10 @@ function handleLobby(msg) {
     hc.style.display = '';
     lw.style.display = 'none';
     gc.style.display = 'none';
-    renderRoleConfig();
+    renderRoleConfig(CFG_IDS.lobby);
+    // Sync toggle
+    const lt = $('lobby-toggle-reveal-death');
+    if (lt) lt.checked = revealRoleOnDeath;
   } else {
     hc.style.display = 'none';
     lw.style.display = '';
@@ -432,6 +451,15 @@ function handleState(msg) {
   gameState = msg;
   showScreen('screen-game');
   renderGameScreen(msg);
+  // Role reveal animation khi mới vào đêm 1
+  if (msg.night === 1 && prevPhase === null && msg.you?.role) {
+    setTimeout(() => {
+      const card = $('my-role-card');
+      card.classList.remove('role-reveal');
+      void card.offsetWidth;
+      card.classList.add('role-reveal');
+    }, 300);
+  }
 }
 
 function handlePrivate(msg) { showPrivateMessage(msg.text, msg.kind); }
@@ -446,6 +474,11 @@ function handleNightResult(msg) {
 }
 
 function handleDayResult(msg) {
+  // Nếu bầy sói đỡ được (không ai chết ban ngày → shield gợi ý Bảo Vệ đã làm việc)
+  // Thực ra đây là kết quả ban ngày — chỉ dùng shield khi deaths=0 và source liên quan
+  if (!msg.deaths || msg.deaths.length === 0) {
+    setTimeout(() => Particles.shield($('night-result-panel')), 200);
+  }
   renderResultPanel('⚖️ Phán quyết của dân làng', msg,
                     '🤝 Dân làng không thống nhất — không ai bị treo cổ');
 }
@@ -457,7 +490,7 @@ function renderResultPanel(title, msg, emptyText) {
   deathsEl.innerHTML = '';
   if (deaths.length > 0) {
     SFX.play('death');
-    deaths.forEach(d => {
+    deaths.forEach((d, idx) => {
       const role = ROLE_META[d.role] || { name: d.role, icon: '❓' };
       const div = document.createElement('div');
       div.className = 'death-item';
@@ -468,6 +501,19 @@ function renderResultPanel(title, msg, emptyText) {
       </div>`;
       deathsEl.appendChild(div);
       logPush(`${d.name} chết — ${SOURCE_LABEL[d.source] || d.source}`);
+
+      // Hiệu ứng máu + rung thẻ người chơi
+      setTimeout(() => {
+        const card = document.querySelector(`.player-card[data-pid="${d.player_id || d.id}"]`);
+        if (card) {
+          card.classList.remove('just-died');
+          void card.offsetWidth;
+          card.classList.add('just-died');
+          Particles.blood(card);
+        } else {
+          Particles.blood(null);
+        }
+      }, 150 + idx * 250);
     });
   } else {
     SFX.play('peace');
@@ -493,10 +539,36 @@ function handleGameOver(msg) {
   prevPhase = 'game_over';
   SFX.setAmbience(null);
   SFX.play(msg.winner === 'village' || msg.winner === 'lovers' ? 'winVillage' : 'winWolf');
+
+  // Sync is_host từ server (gửi riêng cho host)
+  if (msg.is_host != null) isHost = msg.is_host;
+
+  // Particles theo loại thắng
+  setTimeout(() => {
+    if (msg.winner === 'village')    Particles.confetti();
+    else if (msg.winner === 'lovers') { Particles.confetti({ colors: ['#f472b6','#fbcfe8','#fce7f3','#e9d5ff','#a855f7'] }); Particles.hearts(); }
+    else if (msg.winner === 'wolf')   Particles.wolfConfetti();
+    else if (msg.winner === 'white_wolf') Particles.wolfConfetti();
+    else if (msg.winner === 'fool')   Particles.foolWin();
+    else                              Particles.confetti();
+  }, 400);
+
+  // Winner banner class
+  const banner = $('winner-banner');
+  banner.className = 'winner-banner';
+  if (msg.winner === 'wolf' || msg.winner === 'white_wolf') banner.classList.add('winner-wolf');
+  else if (msg.winner === 'village') banner.classList.add('winner-village');
+  else if (msg.winner === 'lovers')  banner.classList.add('winner-lovers');
   // Host mở được ván mới ngay trong phòng; người khác chờ host.
   $('btn-rematch').style.display = isHost ? '' : 'none';
   $('btn-rematch').disabled = false;
   $('over-wait-host').style.display = isHost ? 'none' : '';
+  // Host có thể cấu hình lại trước khi rematch
+  const overConfig = $('over-host-config');
+  if (overConfig) {
+    overConfig.style.display = isHost ? '' : 'none';
+    if (isHost) renderOverConfig();
+  }
   const note = $('over-waiting-note');
   note.style.display = msg.waiting ? '' : 'none';
   note.textContent = msg.waiting
@@ -692,6 +764,10 @@ function renderPlayersGrid(msg) {
   const prompt = msg.prompt;
   const candidates = new Set(prompt?.candidates || []);
   const byTarget = votersByTarget(msg.votes);
+  // Tìm người bị vote nhiều nhất (chỉ show voteShake khi có ≥2 phiếu)
+  const voteCounts = msg.votes?.counts || {};
+  const maxVotes = Math.max(0, ...Object.values(voteCounts));
+
   grid.innerHTML = '';
   (msg.players || []).forEach(p => {
     const meta = ROLE_META[p.role] || { icon: '❓', name: p.role || '?' };
@@ -699,6 +775,8 @@ function renderPlayersGrid(msg) {
     const isSelectable = p.alive && candidates.has(p.id);
     const isSelected = selectedTargets.includes(p.id);
     const isWolf = p.role && ROLE_META[p.role]?.faction === 'wolf';
+    const pVotes = voteCounts[p.id] || 0;
+    const isHot = pVotes >= 2 && pVotes === maxVotes;
     const card = document.createElement('div');
     card.className = [
       'player-card',
@@ -706,14 +784,17 @@ function renderPlayersGrid(msg) {
       isSelectable ? 'selectable' : '',
       isSelected ? 'selected-card' : '',
       isWolf && p.role ? 'wolf-revealed' : '',
+      isHot ? 'vote-hot' : '',
     ].filter(Boolean).join(' ');
     card.dataset.pid = p.id;
     const voters = byTarget[p.id] || [];
     const wolfScope = msg.votes?.scope === 'wolf';
+    // wolfTarget pulse cho con mồi đêm (khi chỉ có 1 mục tiêu bị sói nhắm)
+    const avatarExtra = (wolfScope && pVotes > 0) ? 'wolf-target' : '';
     card.innerHTML = `
       ${isMe ? '<span class="pc-you-tag">Bạn</span>' : ''}
       ${voters.length ? `<span class="pc-votes ${wolfScope ? 'pc-votes-wolf' : ''}" title="${esc(voters.map(nameOf).join(', '))}">${wolfScope ? '🐺' : '🗳️'} ${voters.length}</span>` : ''}
-      <div class="pc-avatar ${!p.alive ? 'dead-avatar' : ''}">${p.alive ? initials(p.name) : '💀'}</div>
+      <div class="pc-avatar ${!p.alive ? 'dead-avatar' : ''} ${avatarExtra}">${p.alive ? initials(p.name) : '💀'}</div>
       <div class="pc-name">${esc(p.name)}</div>
       ${p.role ? `<div class="pc-role">${meta.icon} ${meta.name}</div>` : '<div class="pc-role" style="color:transparent">-</div>'}
       ${voters.length ? `<div class="pc-voters">${esc(voters.map(nameOf).join(', '))}</div>` : ''}`;
@@ -729,6 +810,23 @@ function toggleTarget(pid, msg) {
   if (idx !== -1) selectedTargets.splice(idx, 1);
   else { if (selectedTargets.length >= count) selectedTargets = [pid]; else selectedTargets.push(pid); }
   SFX.play('select');
+
+  // Cupid: hearts khi chọn đủ 2 người
+  if (prompt.role === 'cupid' && selectedTargets.length === 2) {
+    const card = document.querySelector(`.player-card[data-pid="${pid}"]`);
+    Particles.hearts(card);
+  }
+
+  // CardPop: animation bật lên khi select
+  setTimeout(() => {
+    const card = document.querySelector(`.player-card[data-pid="${pid}"]`);
+    if (card && selectedTargets.includes(pid)) {
+      card.classList.remove('selected-card');
+      void card.offsetWidth;
+      card.classList.add('selected-card');
+    }
+  }, 0);
+
   renderPlayersGrid(msg);
   renderCandidateList(prompt, msg.players);
   updateConfirmBtn(prompt);
@@ -813,6 +911,7 @@ function renderWitchPanel(prompt, msg) {
     witchAction = { heal: bitten, poison: null };
     healBtn.classList.add('is-armed'); poisonBtn.classList.remove('is-armed');
     SFX.play('heal');
+    Particles.heal(healBtn);
     setChoice(`🧪 Sẽ cứu <strong>${esc(bittenName)}</strong>`, 'choice-heal');
   };
   poisonBtn.onclick = () => {
@@ -868,6 +967,7 @@ function renderWitchPoisonCandidates(candidates, players, setChoice) {
     btn.addEventListener('click', () => {
       witchAction = { heal: null, poison: pid };
       SFX.play('poison');
+      Particles.poison($('btn-witch-poison'));
       $('witch-poison-target').style.display = 'none';
       setChoice(`☠️ Sẽ đầu độc <strong>${esc(name)}</strong>`, 'choice-poison');
     });
@@ -917,7 +1017,15 @@ function showPrivateMessage(text, kind) {
   div.querySelector('.private-text').textContent = text;
   div.querySelector('.private-close').addEventListener('click', () => div.remove());
   $('screen-game').insertBefore(div, $('my-role-card').nextSibling);
-  if (isReveal) SFX.play('reveal');
+  if (isReveal) {
+    SFX.play('reveal');
+    // Lấy element private-msg vừa tạo làm origin
+    setTimeout(() => {
+      const el = $('screen-game').querySelector('.private-reveal');
+      const isWolf = text && (text.includes('thuộc phe Sói') || text.includes('là '));
+      Particles.stars(el, isWolf && !text.includes('KHÔNG'));
+    }, 50);
+  }
   showToast((isReveal ? '🔮 ' : '🔒 ') + text);
   logPush(text);
 }
@@ -1045,39 +1153,33 @@ function totalRoles() {
   return Object.values(roleCounts).reduce((s, v) => s + v, 0);
 }
 
-function renderRoleConfig() {
+function renderRoleConfig(ids) {
+  ids = ids || CFG_IDS.lobby;
   const n = playerCount || 5;
-  // Load preset if roleCounts empty
   if (Object.keys(roleCounts).length === 0) loadPreset(n);
 
-  // Update hint
   const total = totalRoles();
   const diff = total - n;
   let hintText = n > 0 ? `${n} người chơi — cần đúng ${n} vai` : 'Đang chờ người chơi…';
   if (n > 0 && diff !== 0) {
-    hintText = diff > 0
-      ? `⚠️ Đang thừa ${diff} vai (cần bỏ bớt)`
-      : `⚠️ Đang thiếu ${Math.abs(diff)} vai`;
+    hintText = diff > 0 ? `⚠️ Đang thừa ${diff} vai (cần bỏ bớt)` : `⚠️ Đang thiếu ${Math.abs(diff)} vai`;
   } else if (n > 0 && diff === 0) {
     hintText = `✅ ${n} người — bộ vai hợp lệ`;
   }
-  $('cfg-player-hint').textContent = hintText;
+  const hintEl = $(ids.hint);
+  if (hintEl) hintEl.textContent = hintText;
 
-  // Render role rows
-  const list = $('role-config-list');
+  const list = $(ids.list);
+  if (!list) return;
   list.innerHTML = '';
   ALL_ROLE_IDS.forEach(id => {
     const meta = ROLE_META[id];
     const count = roleCounts[id] || 0;
     const isWolf = meta.faction === 'wolf';
-
-    // Min counts per role (can't go below 0, wolf needs at least 1 if present)
     const minCount = 0;
     const maxCount = Math.max(n || 18, 1);
-
     const row = document.createElement('div');
     row.className = `role-cfg-row${count > 0 ? ' has-count' : ' disabled-row'}`;
-
     row.innerHTML = `
       <span class="role-cfg-icon">${meta.icon}</span>
       <div class="role-cfg-info">
@@ -1098,40 +1200,45 @@ function renderRoleConfig() {
     list.appendChild(row);
   });
 
-  // Steppers
   list.querySelectorAll('.cfg-step-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = btn.dataset.role, dir = parseInt(btn.dataset.dir, 10);
       roleCounts[id] = Math.max(0, (roleCounts[id] || 0) + dir);
-      renderRoleConfig();
+      renderRoleConfig(ids);
       sendConfig();
     });
   });
-
-  // Info buttons
   list.querySelectorAll('.btn-role-info-sm').forEach(btn => {
     btn.addEventListener('click', () => openRoleModal(btn.dataset.role));
   });
 
-  // Preview chips
-  renderRolePreview();
+  renderRolePreview(ids);
 
-  // Enable/disable start button
-  const startBtn = $('btn-start');
-  if (n >= 5 && diff === 0) {
-    startBtn.disabled = false;
-    startBtn.textContent = '🌙 Bắt đầu ván';
-  } else if (n < 5) {
-    startBtn.disabled = true;
-    startBtn.textContent = `🌙 Cần ít nhất 5 người`;
-  } else {
-    startBtn.disabled = true;
-    startBtn.textContent = diff > 0 ? `🌙 Bỏ bớt ${diff} vai` : `🌙 Thêm ${Math.abs(diff)} vai`;
+  // Enable/disable start button — chỉ áp dụng khi render vào lobby
+  if (ids === CFG_IDS.lobby) {
+    const startBtn = $('btn-start');
+    if (startBtn) {
+      if (n >= 5 && diff === 0) {
+        startBtn.disabled = false;
+        startBtn.textContent = '🌙 Bắt đầu ván';
+      } else if (n < 5) {
+        startBtn.disabled = true;
+        startBtn.textContent = `🌙 Cần ít nhất 5 người`;
+      } else {
+        startBtn.disabled = true;
+        startBtn.textContent = diff > 0 ? `🌙 Bỏ bớt ${diff} vai` : `🌙 Thêm ${Math.abs(diff)} vai`;
+      }
+    }
   }
 }
 
-function renderRolePreview() {
-  const chips = $('role-preview-chips');
+// Alias for over-screen
+function renderRoleConfigInto(ids) { renderRoleConfig(ids); }
+
+function renderRolePreview(ids) {
+  ids = ids || CFG_IDS.lobby;
+  const chips = $(ids.chips);
+  if (!chips) return;
   chips.innerHTML = '';
   ALL_ROLE_IDS.forEach(id => {
     const count = roleCounts[id] || 0;
@@ -1148,17 +1255,24 @@ function renderRolePreview() {
 }
 
 function sendConfig() {
-  // Build disabled_roles list (roles with count 0)
-  const disabledList = ALL_ROLE_IDS.filter(id => !roleCounts[id] || roleCounts[id] === 0);
+  // Tạo flat role list từ roleCounts: {wolf:2, seer:1} → ['wolf','wolf','seer',...]
+  const roleList = [];
+  ALL_ROLE_IDS.forEach(id => {
+    const count = roleCounts[id] || 0;
+    for (let i = 0; i < count; i++) roleList.push(id);
+  });
+
   send({
     type: 'config',
     roles: Object.fromEntries(ALL_ROLE_IDS.map(id => [id, !!(roleCounts[id] && roleCounts[id] > 0)])),
+    role_list: roleList,
     timers: {
       night_phase: timers.night_phase,
       day_discuss: timers.day_discuss,
       day_vote: timers.day_vote,
       hunter_shot: timers.hunter_shot,
     },
+    reveal_role_on_death: revealRoleOnDeath,
   });
 }
 
@@ -1186,12 +1300,22 @@ document.querySelectorAll('.step-btn').forEach(btn => {
   });
 });
 
-// ── Preset button ──
+// ── Preset button (lobby) ──
 $('btn-preset').addEventListener('click', () => {
   loadPreset(playerCount || 5);
-  renderRoleConfig();
+  renderRoleConfig(CFG_IDS.lobby);
   sendConfig();
   showToast('Đã khôi phục bộ vai mặc định', 'success');
+});
+
+// ── Preset button (over-screen) — element có thể chưa có khi script chạy ──
+document.addEventListener('click', e => {
+  if (e.target && e.target.id === 'over-btn-preset') {
+    loadPreset(playerCount || 5);
+    renderRoleConfig(CFG_IDS.over);
+    sendConfig();
+    showToast('Đã khôi phục bộ vai mặc định', 'success');
+  }
 });
 
 // ══════════════════════════════════════════
@@ -1316,9 +1440,16 @@ $('btn-confirm-action').addEventListener('click', () => {
   const prompt = currentPrompt; if (!prompt) return;
   if (prompt.action === 'vote') {
     send({ type: 'vote', target: selectedTargets[0] || null });
+    // Lightning khi xác nhận phiếu treo cổ
+    const targetCard = document.querySelector(`.player-card[data-pid="${selectedTargets[0]}"]`);
+    Particles.lightning(targetCard);
   } else if (prompt.action === 'witch') {
     if (!witchAction) return;
     send({ type: 'action', phase: 'night_witch', targets: [], extra: { heal: witchAction.heal, poison: witchAction.poison } });
+  } else if (prompt.action === 'shoot') {
+    send({ type: 'action', phase: gameState?.phase || '', targets: selectedTargets, extra: {} });
+    const targetCard = document.querySelector(`.player-card[data-pid="${selectedTargets[0]}"]`);
+    Particles.blood(targetCard);
   } else {
     send({ type: 'action', phase: gameState?.phase || '', targets: selectedTargets, extra: {} });
   }
@@ -1441,6 +1572,45 @@ $('btn-leave-game').addEventListener('click',  () => openLeaveModal('game'));
 $('btn-leave-cancel').addEventListener('click', closeLeaveModal);
 $('modal-leave').addEventListener('click', e => { if (e.target === $('modal-leave')) closeLeaveModal(); });
 $('btn-leave-confirm').addEventListener('click', doLeave);
+
+// ══════════════════════════════════════════
+//  CẤU HÌNH SAU VÁN (màn game over, chỉ host)
+// ══════════════════════════════════════════
+
+// Mỗi set ID khác nhau để tránh xung đột DOM
+const CFG_IDS = {
+  lobby: {
+    hint: 'cfg-player-hint',
+    list: 'role-config-list',
+    chips: 'role-preview-chips',
+  },
+  over: {
+    hint: 'over-cfg-player-hint',
+    list: 'over-role-config-list',
+    chips: 'over-role-preview-chips',
+  },
+};
+
+function renderOverConfig() {
+  // Sync toggle
+  const toggle = $('toggle-reveal-death');
+  if (toggle) toggle.checked = revealRoleOnDeath;
+  const lobbyToggle = $('lobby-toggle-reveal-death');
+  if (lobbyToggle) lobbyToggle.checked = revealRoleOnDeath;
+
+  // Render role config into over-screen elements
+  renderRoleConfigInto(CFG_IDS.over);
+}
+
+function toggleRevealDeath(val) {
+  revealRoleOnDeath = val;
+  // Sync tất cả toggles
+  const t1 = $('toggle-reveal-death');
+  const t2 = $('lobby-toggle-reveal-death');
+  if (t1) t1.checked = val;
+  if (t2) t2.checked = val;
+  sendConfig();
+}
 
 // ══════════════════════════════════════════
 //  GAME OVER

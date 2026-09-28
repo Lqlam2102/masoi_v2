@@ -55,7 +55,8 @@ async def broadcast(room) -> None:
         room.machine.last_result.reveals = []
 
     for pid, sock in sockets.items():
-        view = state_view(room.machine, pid, None)
+        view = state_view(room.machine, pid, None,
+                          reveal_role_on_death=getattr(room, 'reveal_role_on_death', True))
         try:
             await sock.send_json(view)
         except Exception:
@@ -149,6 +150,7 @@ async def websocket_endpoint(ws: WebSocket):
             "room": room.code,
             "is_host": is_host,
             "waiting": player_id in room.pending,
+            "settings": {"reveal_role_on_death": room.reveal_role_on_death},
         })
 
         # ── Gửi state hiện tại ──
@@ -160,6 +162,7 @@ async def websocket_endpoint(ws: WebSocket):
             view = state_view(
                 room.machine, player_id, room._deadline,
                 room.phase_duration(room.machine.phase),
+                reveal_role_on_death=room.reveal_role_on_death,
             )
             view["is_host"] = player_id == room.host_id
             await ws.send_json(view)

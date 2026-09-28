@@ -93,6 +93,17 @@
           <span class="cfg-hint">Bộ vai sẽ dùng:</span>
           <div id="role-preview-chips" class="role-preview-chips"></div>
         </div>
+        <!-- Cài đặt lộ role -->
+        <div class="setting-row" style="margin-top:10px">
+          <div class="setting-info">
+            <span class="setting-label">Lộ role khi chết</span>
+            <span class="setting-desc">Tắt để giữ bí mật vai đến cuối ván</span>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="lobby-toggle-reveal-death" checked onchange="toggleRevealDeath(this.checked)" />
+            <span class="toggle-track"></span>
+          </label>
+        </div>
       </div>
 
       <!-- Tab: Timers -->
@@ -258,6 +269,33 @@
       </details>
     </div>
     <div id="over-waiting-note" class="over-waiting-note" style="display:none"></div>
+
+    <!-- Config lại trước khi rematch (chỉ host) -->
+    <div id="over-host-config" class="card" style="display:none">
+      <h3 class="section-title">⚙️ Cấu hình ván mới</h3>
+      <!-- Toggle reveal role khi chết -->
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">Lộ role khi chết</span>
+          <span class="setting-desc">Người chết để lộ vai cho mọi người thấy</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="toggle-reveal-death" checked onchange="toggleRevealDeath(this.checked)" />
+          <span class="toggle-track"></span>
+        </label>
+      </div>
+      <!-- Role count config -->
+      <div class="cfg-info-row" style="margin-top:14px">
+        <span id="over-cfg-player-hint" class="cfg-hint"></span>
+        <button id="over-btn-preset" class="btn btn-ghost btn-sm">↺ Mặc định</button>
+      </div>
+      <div id="over-role-config-list" class="role-config-list"></div>
+      <div class="role-preview-wrap">
+        <span class="cfg-hint">Bộ vai ván mới:</span>
+        <div id="over-role-preview-chips" class="role-preview-chips"></div>
+      </div>
+    </div>
+
     <button id="btn-rematch" class="btn btn-primary btn-lg mt-2">🔄 Chơi ván mới</button>
     <p id="over-wait-host" class="waiting-text" style="display:none">Chờ host mở ván mới…</p>
     <button id="btn-play-again" class="btn btn-ghost mt-2">← Về trang chủ</button>
@@ -327,6 +365,7 @@
 <button id="btn-sound" class="btn-sound" title="Bật/tắt âm thanh" aria-label="Bật/tắt âm thanh">🔊</button>
 
 <div id="toast" class="toast" aria-live="polite"></div>
+<script src="/static/particles.js"></script>
 <script src="/static/sfx.js"></script>
 <script src="/static/app.js"></script>
 </body>

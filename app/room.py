@@ -88,6 +88,8 @@ class Room:
         # Người vào khi ván đang chạy: giữ ghế, ngồi chờ ván sau.
         # Họ KHÔNG được nhận state, chat hay kết quả đêm của ván hiện tại.
         self.pending: set[str] = set()
+        self.reveal_role_on_death: bool = True
+        self.custom_role_list: list[str] = []   # role list do host tự cấu hình
 
     # ── Thông tin cho sảnh chờ ──
 
@@ -113,6 +115,7 @@ class Room:
             "max": MAX_PLAYERS,
             "min": MIN_PLAYERS,
             "status": "playing" if self.in_game else "lobby",
+            "game_over": self.machine is not None and self.machine.phase == "game_over",
             "night": self.machine.state.night if self.machine else 0,
         }
 
@@ -212,6 +215,7 @@ class Room:
             view = state_view(
                 self.machine, pid, self._deadline,
                 self.phase_duration(self.machine.phase) if self.machine else None,
+                reveal_role_on_death=self.reveal_role_on_death,
             )
             view["is_host"] = pid == self.host_id
             await self._send(conn, view)
@@ -249,7 +253,11 @@ class Room:
                 f"Cần ít nhất {MIN_PLAYERS} người chơi, hiện có {len(self.names)}"
             )
         rng = rng or random.Random()
-        state = build_state(self.names, rng, disabled=self.disabled_roles)
+        state = build_state(
+            self.names, rng,
+            disabled=self.disabled_roles,
+            custom_roles=self.custom_role_list or None,
+        )
         self.machine = PhaseMachine(state)
         self.machine.start()
 
@@ -316,8 +324,13 @@ class Room:
         deaths = []
         for d in result.deaths:
             p = self.machine.state.get(d.player_id)
-            deaths.append({"id": d.player_id, "name": p.name,
-                           "role": p.role_id, "source": d.source})
+            # Chỉ lộ role nếu cài đặt cho phép
+            deaths.append({
+                "id": d.player_id,
+                "name": p.name,
+                "role": p.role_id if self.reveal_role_on_death else None,
+                "source": d.source,
+            })
         return deaths
 
     @staticmethod
@@ -376,7 +389,18 @@ class Room:
                 "roles": roles,
                 "full_log": list(self.machine.state.log),
                 "waiting": len(self.pending),
-            }, include_pending=True)   # người ngồi chờ cần biết đã tới lượt mình
+                "is_host": False,   # sẽ override per-connection bên dưới nếu cần
+            }, include_pending=True)
+            # Gửi riêng is_host=True cho host để hiện nút rematch
+            await self.send_to(self.host_id or "", {
+                "type": "game_over",
+                "winner": winner,
+                "winner_label": WINNER_LABEL.get(winner, winner),
+                "roles": roles,
+                "full_log": list(self.machine.state.log),
+                "waiting": len(self.pending),
+                "is_host": True,
+            })
             return
 
         # Hẹn giờ TRƯỚC khi gửi state: state_view đọc self._deadline, gửi trước
@@ -391,9 +415,22 @@ class Room:
             await self.send_to(player_id, {"type": "error",
                                            "message": "Chỉ host mới được config"})
             return
-        if self.machine is not None:
-            await self.send_to(player_id, {"type": "error", "message": "Ván đã bắt đầu"})
+
+        # reveal_role_on_death có thể thay đổi bất kỳ lúc nào (kể cả giữa ván)
+        if msg.reveal_role_on_death is not None:
+            self.reveal_role_on_death = bool(msg.reveal_role_on_death)
+
+        # roles và timers chỉ thay đổi được khi ở lobby hoặc vừa kết thúc ván
+        game_is_over = self.machine is not None and self.machine.phase == "game_over"
+        if self.machine is not None and not game_is_over:
+            # Đang chơi — chỉ ack reveal setting, không thay đổi roles/timers
+            await self.send_to(player_id, {
+                "type": "config_ok",
+                "timers": dict(self.timers),
+                "reveal_role_on_death": self.reveal_role_on_death,
+            })
             return
+
         for role_id, enabled in (msg.roles or {}).items():
             if enabled:
                 self.disabled_roles.discard(role_id)
@@ -402,16 +439,35 @@ class Room:
         for role_id in msg.disabled_roles or []:
             self.disabled_roles.add(role_id)
 
+        # role_list: danh sách đầy đủ do client gửi — ưu tiên hơn disabled_roles
+        if msg.role_list:
+            self.custom_role_list = list(msg.role_list)
+        else:
+            self.custom_role_list = []
+
         for key, val in (msg.timers or {}).items():
             if key not in self.timers:
                 continue
             low, high = TIMER_BOUNDS.get(key, (3, 900))
             self.timers[key] = max(low, min(high, int(val)))
-        # `night` là alias của `night_phase` — giữ hai giá trị luôn khớp nhau.
         if "night_phase" in msg.timers:
             self.timers["night"] = self.timers["night_phase"]
 
-        await self.send_to(player_id, {"type": "config_ok", "timers": dict(self.timers)})
+        await self.send_to(player_id, {
+            "type": "config_ok",
+            "timers": dict(self.timers),
+            "reveal_role_on_death": self.reveal_role_on_death,
+        })
+
+    async def handle_config_settings(self, player_id: str, msg) -> None:
+        """Cài đặt bổ sung (reveal_role_on_death…) — có thể gọi cả trước lẫn sau ván."""
+        if player_id != self.host_id:
+            await self.send_to(player_id, {"type": "error", "message": "Chỉ host mới được config"})
+            return
+        if hasattr(msg, "reveal_role_on_death") and msg.reveal_role_on_death is not None:
+            self.reveal_role_on_death = bool(msg.reveal_role_on_death)
+        await self.send_to(player_id, {"type": "config_ok",
+                                       "reveal_role_on_death": self.reveal_role_on_death})
 
     async def handle_start(self, player_id: str) -> None:
         if player_id != self.host_id:
